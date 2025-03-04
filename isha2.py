@@ -2,7 +2,6 @@ import streamlit as st
 import ollama
 import json
 import time
-import pyperclip
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from functools import lru_cache
@@ -102,10 +101,6 @@ st.markdown(
         .stTextInput input { background-color: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 10px; font-size: 14px; color: #c9d1d9; width: 100%; }
         .stTextInput input:focus { border-color: #1f6feb; outline: none; box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.2); }
         
-        /* Buttons */
-        .stButton button { background-color: #1f6feb; color: white; border-radius: 8px; padding: 8px 16px; font-size: 12px; transition: background-color 0.3s; border: none; }
-        .stButton button:hover { background-color: #1857c2; }
-        
         /* Typing animation */
         @keyframes typing {
             from { width: 0; }
@@ -160,20 +155,6 @@ if prompt := st.chat_input("💬 Ask me anything..."):
             response = retrieve_and_blend_answer(prompt)
             display_typing_effect(response)
             st.session_state.messages.append({"role": "assistant", "content": response})
-
-            # Add "Copy to Clipboard" button
-            if st.button("📋 Copy to Clipboard", key="copy_button"):
-                pyperclip.copy(response)
-                st.success("Copied to clipboard!")
-
-            # Add feedback buttons (thumbs up/down)
-            col1, col2 = st.columns(2)
-            with col1:
-                if st.button("👍 Thumbs Up", key="thumbs_up"):
-                    st.success("Thank you for your feedback!")
-            with col2:
-                if st.button("👎 Thumbs Down", key="thumbs_down"):
-                    st.error("We'll improve! Thank you for your feedback.")
 
 # Footer
 st.markdown("<div class='footer'>🚀 Built by Fazxill | 🔹 Version 3.1</div>", unsafe_allow_html=True)
