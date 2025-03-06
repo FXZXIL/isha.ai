@@ -18,7 +18,6 @@ import PyPDF2
 import pdfplumber
 from io import BytesIO
 import base64
-import re
 
 # Set Streamlit page config
 st.set_page_config(page_title="Isha.AI", page_icon="🤖", layout="wide")
@@ -26,9 +25,8 @@ st.set_page_config(page_title="Isha.AI", page_icon="🤖", layout="wide")
 # Initialize speech recognizer
 recognizer = sr.Recognizer()
 
-# File paths for JSON data, conversation history, and user info
+# File path for JSON data
 JSON_FILE_PATH = "C:/Users/hp/Downloads/wincept_finetune.json"
-HISTORY_FILE_PATH = "C:/Users/hp/Downloads/isha_conversation_history.json"
 
 # Set Tesseract path (adjust if needed)
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"  # Windows example
@@ -45,22 +43,12 @@ def get_cpu_model():
     except Exception as e:
         return f"Error detecting CPU: {str(e)}"
 
-# Normalize query for consistent matching
-def normalize_query(query):
-    return re.sub(r'\s+', ' ', query.strip().lower()).strip()
-
-# Load JSON data (QA pairs)
+# Load JSON data
 def load_json_data(file_path):
     try:
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as file:
-                data = json.load(file)
-                st.write(f"Loaded {len(data)} QA pairs from {file_path}")
-                # Log first few entries for debugging
-                if data:
-                    st.write(f"Sample QA pairs: {data[:min(3, len(data))]}")
-                return data
-        st.write(f"No file found at {file_path}, starting with empty QA data.")
+                return json.load(file)
         return []
     except Exception as e:
         st.error(f"Error loading JSON: {str(e)}")
@@ -75,27 +63,6 @@ def save_json_data(file_path, data):
     except Exception as e:
         st.error(f"Error saving JSON: {str(e)}")
 
-# Load conversation history and user info
-def load_conversation_history(file_path):
-    try:
-        if os.path.exists(file_path):
-            with open(file_path, "r", encoding="utf-8") as file:
-                data = json.load(file)
-                return data.get("messages", []), data.get("user_info", {})
-        return [], {}
-    except Exception as e:
-        st.error(f"Error loading conversation history: {str(e)}")
-        return [], {}
-
-# Save conversation history and user info
-def save_conversation_history(file_path, messages, user_info):
-    try:
-        data = {"messages": messages, "user_info": user_info}
-        with open(file_path, "w", encoding="utf-8") as file:
-            json.dump(data, file, indent=4)
-    except Exception as e:
-        st.error(f"Error saving conversation history: {str(e)}")
-
 # Cache the TF-IDF vectorizer and vectors
 @st.cache_resource
 def get_tfidf_vectors(qa_pairs):
@@ -103,16 +70,10 @@ def get_tfidf_vectors(qa_pairs):
     question_vectors = vectorizer.fit_transform(qa_pairs.keys())
     return vectorizer, question_vectors
 
-# Load initial datasets
+# Load initial dataset
 json_data = load_json_data(JSON_FILE_PATH)
-qa_pairs = {normalize_query(item["input"]): item["output"] for item in json_data} if json_data else {}
+qa_pairs = {item["input"].strip().lower(): item["output"] for item in json_data} if json_data else {}
 vectorizer, question_vectors = get_tfidf_vectors(qa_pairs) if qa_pairs else (None, None)
-
-# Load conversation history and user info into session state
-if "messages" not in st.session_state or "user_info" not in st.session_state:
-    messages, user_info = load_conversation_history(HISTORY_FILE_PATH)
-    st.session_state.messages = messages
-    st.session_state.user_info = user_info
 
 # Extract text from image
 def extract_text_from_image(image_file):
@@ -127,16 +88,18 @@ def extract_text_from_image(image_file):
 # Extract text from PDF with fallback to OCR
 def extract_text_from_pdf(pdf_file):
     try:
+        # First attempt: Extract text using pdfplumber
         with pdfplumber.open(pdf_file) as pdf:
             text = "\n".join(page.extract_text() or "" for page in pdf.pages if page.extract_text())
         if text.strip():
             return text.strip()
         
+        # Fallback: If no text is extracted, try OCR with pytesseract
         st.write("No text extracted with pdfplumber, attempting OCR...")
         text = ""
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
-                img = page.to_image(resolution=300)
+                img = page.to_image(resolution=300)  # Higher resolution for better OCR
                 text += pytesseract.image_to_string(img.original) + "\n"
         return text.strip() if text.strip() else "No text could be extracted from the PDF."
     except Exception as e:
@@ -169,33 +132,14 @@ def web_search(query):
 def analyze_x_posts(query):
     return f"Simulated X analysis for '{query}': No real X data available."
 
-# Update user info based on query
-def update_user_info(query):
-    name_match = re.search(r"my name is (\w+)", query.lower())
-    if name_match:
-        st.session_state.user_info["name"] = name_match.group(1).capitalize()
-        st.write(f"Updated your name to: {st.session_state.user_info['name']}")
-
 # Retrieve and blend answer with multimodal support
 def retrieve_and_blend_answer(query, use_web_search=False, use_reasoning=False, image_file=None, pdf_file=None, threshold=0.6):
-    query_normalized = normalize_query(query)
+    query = query.strip().lower()
     context = ""
     
-    st.write(f"Processing query: '{query_normalized}'")  # Debug: Show normalized query
-    
-    # Update user info if applicable
-    update_user_info(query)
-    
-    if query_normalized == "cpu model" or query_normalized == "what is my cpu":
-        st.write("Returning CPU model directly.")
+    if query == "cpu model" or query == "what is my cpu":
         return f"Your CPU model is: {get_cpu_model()}"
     
-    # Check fine-tuned data first with exact match
-    if query_normalized in qa_pairs:
-        st.write(f"Exact match found in fine-tuned data: '{qa_pairs[query_normalized]}'")
-        return qa_pairs[query_normalized]
-    
-    # Handle file inputs
     if image_file:
         image_text = extract_text_from_image(image_file)
         context += f"\nImage content: {image_text}"
@@ -205,59 +149,44 @@ def retrieve_and_blend_answer(query, use_web_search=False, use_reasoning=False, 
         context += f"\nPDF content: {pdf_text}"
         st.write(f"Extracted text from PDF: {pdf_text[:100]}...")
     
-    # Web or X search
+    if query in qa_pairs and not (image_file or pdf_file):
+        return qa_pairs[query]
+    
     if use_web_search:
         web_context = web_search(query)
         context += f"\nWeb search results: {web_context}"
-        st.write("Using web search context.")
         response = generate_llm_response(query, context, use_reasoning)
         return f"[Web] {response}"
-    elif "x post" in query_normalized or "twitter" in query_normalized:
+    elif "x post" in query or "twitter" in query:
         x_context = analyze_x_posts(query)
         context += f"\nX analysis: {x_context}"
-        st.write("Using X analysis context.")
         response = generate_llm_response(query, context, use_reasoning)
         return f"[X] {response}"
     
-    # TF-IDF similarity search (only if no exact match or special conditions)
-    if question_vectors is not None and not (image_file or pdf_file or use_web_search or use_reasoning):
-        query_vector = vectorizer.transform([query_normalized])
+    words = query.split()
+    relevant_answers = [qa_pairs[q] for q in qa_pairs if any(word in q for word in words)]
+    if relevant_answers:
+        context += f"\nRelated answers: {' '.join(relevant_answers)}"
+    
+    if question_vectors is not None and not (image_file or pdf_file):
+        query_vector = vectorizer.transform([query])
         similarities = cosine_similarity(query_vector, question_vectors)
         most_similar_idx = similarities.argmax()
         similarity_score = similarities[0][most_similar_idx]
         if similarity_score >= threshold:
-            similar_answer = list(qa_pairs.values())[most_similar_idx]
-            similar_query = list(qa_pairs.keys())[most_similar_idx]
-            st.write(f"Similar match found: '{similar_query}' with score {similarity_score:.2f}")
-            return similar_answer  # Return similar answer directly
+            context += f"\nSimilar answer: {list(qa_pairs.values())[most_similar_idx]}"
     
-    # Fallback to LLM if no match
-    st.write("No exact or similar match in fine-tuned data, generating response with LLM.")
-    words = query_normalized.split()
-    relevant_answers = [qa_pairs[q] for q in qa_pairs if any(word in q for word in words)]
-    if relevant_answers:
-        context += f"\nRelated answers from fine-tuned data: {' '.join(relevant_answers)}"
-    
-    response = generate_llm_response(query, context, use_reasoning)
-    return response
+    return generate_llm_response(query, context, use_reasoning)
 
-# Generate response from LLM with enhanced context awareness
+# Generate response from LLM with explicit summarization instruction
 def generate_llm_response(prompt, context=None, use_reasoning=False):
-    if "messages" in st.session_state and st.session_state.messages:
+    if "messages" in st.session_state:
         conversation_history = "\n".join([f"{msg['role']}: {msg['content']}" for msg in st.session_state.messages[-10:]])
-    else:
-        conversation_history = ""
+        if context:
+            context = f"Conversation History:\n{conversation_history}\n\nAdditional Context:\n{context}"
+        else:
+            context = f"Conversation History:\n{conversation_history}"
     
-    user_info_str = ""
-    if "user_info" in st.session_state and st.session_state.user_info:
-        if "name" in st.session_state.user_info:
-            user_info_str = f"User's name: {st.session_state.user_info['name']}\n"
-    
-    if context or conversation_history or user_info_str:
-        full_context = f"{user_info_str}Conversation History (past interactions):\n{conversation_history}\n\nCurrent Context:\n{context or ''}"
-    else:
-        full_context = ""
-
     if use_reasoning:
         prompt = (
             f"For the query '{prompt}', provide a detailed, step-by-step reasoning process. "
@@ -265,17 +194,12 @@ def generate_llm_response(prompt, context=None, use_reasoning=False):
             "leading to the final answer. Ensure the explanation is structured and easy to follow."
         )
     elif "summarize" in prompt.lower():
-        prompt = f"Summarize the following content:\n\n{full_context}\n\nProvide a concise summary of the key points."
-    else:
-        prompt = (
-            f"Based on our past interactions, the user's info, and the current context, respond to the query: '{prompt}'. "
-            "Use the provided user info (e.g., name) and conversation history to personalize your response where relevant. "
-            "If the query asks for the user's name, use the most recent name provided."
-        )
+        # Explicitly instruct the LLM to summarize the context
+        prompt = f"Summarize the following content:\n\n{context}\n\nProvide a concise summary of the key points."
 
     messages = [{'role': 'user', 'content': prompt}]
-    if full_context:
-        messages.insert(0, {'role': 'system', 'content': full_context})
+    if context:
+        messages.insert(0, {'role': 'system', 'content': context})
     try:
         response = ollama.chat(model="llama3.2:3b", messages=messages)
         return response['message']['content']
@@ -312,33 +236,24 @@ def speak_response(text):
 # Update JSON and retrain (only for new questions)
 def update_json_and_retrain(query, response):
     global qa_pairs, vectorizer, question_vectors, json_data
-    query_normalized = normalize_query(query)
+    query_lower = query.strip().lower()
     source = "User" if "[Web]" not in response and "[X]" not in response and "[Reasoning]" not in response else \
              ("Web" if "[Web]" in response else "X" if "[X]" in response else "Reasoning")
     
-    if query_normalized not in qa_pairs:
+    if query_lower not in qa_pairs:
         new_entry = {
-            "input": query_normalized,
+            "input": query_lower,
             "output": response,
             "timestamp": datetime.now().isoformat(),
             "source": source
         }
         json_data.append(new_entry)
-        st.write(f"Added new QA pair: {new_entry}")
+        st.write(f"Added new entry: {new_entry}")
         save_json_data(JSON_FILE_PATH, json_data)
-        
-        qa_pairs[query_normalized] = response
-        get_tfidf_vectors.clear()
-        vectorizer, question_vectors = get_tfidf_vectors(qa_pairs)
-    else:
-        st.write(f"Query '{query_normalized}' already exists in fine-tuned data, skipping update.")
-
-# Save conversation history and user info after each interaction
-def save_history_after_interaction(query, response):
-    if "messages" in st.session_state and "user_info" in st.session_state:
-        st.session_state.messages.append({"role": "user", "content": query})
-        st.session_state.messages.append({"role": "assistant", "content": response})
-        save_conversation_history(HISTORY_FILE_PATH, st.session_state.messages, st.session_state.user_info)
+    
+    qa_pairs[query_lower] = response
+    get_tfidf_vectors.clear()
+    vectorizer, question_vectors = get_tfidf_vectors(qa_pairs)
 
 # Custom CSS for improved UI
 st.markdown(
@@ -516,6 +431,8 @@ with st.sidebar:
     st.write("🚀 Built by Fazxill")
     st.write("🔹 Version 3.1")
     st.markdown("### Chat History")
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
     for idx, message in enumerate(st.session_state.messages):
         role = "You" if message["role"] == "user" else "Isha"
         content = message["content"][:50] + "..." if len(message["content"]) > 50 else message["content"]
@@ -582,53 +499,58 @@ col1, col2, col3, col4, col5 = st.columns([1, 1, 1, 1, 1])
 with col1:
     if st.button("Send", key="send_button"):
         if query:
+            st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"):
                 st.markdown(f"<div class='user-message'>{query}</div>", unsafe_allow_html=True)
             with st.chat_message("assistant"):
                 with st.spinner("Processing..."):
                     response = retrieve_and_blend_answer(query)
-                    save_history_after_interaction(query, response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
                     update_json_and_retrain(query, response)
                     st.rerun()
 with col2:
     if st.button("🎤 Voice", key="voice_button"):
         query = speech_to_text()
         if query:
+            st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"):
                 st.markdown(f"<div class='user-message'>{query}</div>", unsafe_allow_html=True)
             with st.chat_message("assistant"):
                 with st.spinner("Processing..."):
                     response = retrieve_and_blend_answer(query)
                     speak_response(response.replace("[Web]", "").replace("[X]", "").replace("[Reasoning]", "").replace("[File]", ""))
-                    save_history_after_interaction(query, response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
                     update_json_and_retrain(query, response)
                     st.rerun()
 with col3:
     if st.button("🔍 Search", key="search_button"):
         if query:
+            st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"):
                 st.markdown(f"<div class='user-message'>{query}</div>", unsafe_allow_html=True)
             with st.chat_message("assistant"):
                 with st.spinner("Searching..."):
                     response = retrieve_and_blend_answer(query, use_web_search=True)
-                    save_history_after_interaction(query, response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
                     update_json_and_retrain(query, response)
                     st.rerun()
 with col4:
     if st.button("🤓 Reason", key="reasoning_button"):
         if query:
+            st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"):
                 st.markdown(f"<div class='user-message'>{query}</div>", unsafe_allow_html=True)
             with st.chat_message("assistant"):
                 with st.spinner("Reasoning..."):
                     response = retrieve_and_blend_answer(query, use_reasoning=True)
                     response = f"[Reasoning] {response}"
-                    save_history_after_interaction(query, response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
                     update_json_and_retrain(query, response)
                     st.rerun()
 with col5:
     if st.button("📄 Search Using File", key="file_search_button"):
         if uploaded_file and query:
+            st.session_state.messages.append({"role": "user", "content": query})
             with st.chat_message("user"):
                 st.markdown(f"<div class='user-message'>{query}</div>", unsafe_allow_html=True)
             with st.chat_message("assistant"):
@@ -640,7 +562,7 @@ with col5:
                     else:
                         response = "Unsupported file type. Please upload an image (JPG/PNG) or PDF."
                     response = f"[File] {response}"
-                    save_history_after_interaction(query, response)
+                    st.session_state.messages.append({"role": "assistant", "content": response})
                     update_json_and_retrain(query, response)
                     st.rerun()
         elif not uploaded_file:
